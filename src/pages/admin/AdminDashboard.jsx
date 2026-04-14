@@ -570,14 +570,14 @@ export default function AdminDashboard() {
     setExportLoading(true)
     toast('Generando Excel...', { icon: '⏳', duration: 2000 })
     try {
-      // 1. Obtener todas las actas del partido con detalle completo
+      // 1. Actas completas
       const { data: actasRaw } = await supabase
         .from('actas')
         .select(`
           id, estado, hash_acta, enviado_at, created_at, updated_at,
           votos_nulos, votos_blancos, total_votantes,
           mesa:mesas(numero, local_nombre, distrito, provincia, departamento, electores_habiles),
-          categoria:categorias(nombre, codigo),
+          categoria:categorias(nombre, codigo, orden),
           personero:perfiles(nombre, dni)
         `)
         .eq('partido_id', perfil.partido_id)
@@ -585,28 +585,14 @@ export default function AdminDashboard() {
 
       const actaIds = (actasRaw ?? []).map(a => a.id)
 
-      // 2. Votos por partido para cada acta
-      const { data: votosRaw } = actaIds.length
-        ? await supabase.from('acta_votos')
-            .select('acta_id, votos, partido_votado:partidos(codigo, nombre, orden)')
-            .in('acta_id', actaIds)
-        : { data: [] }
-
-      // 3. Preferenciales
-      const votoIds = (votosRaw ?? []).map(v => v.id).filter(Boolean)
-      const { data: prefsRaw } = votoIds.length
-        ? await supabase.from('acta_votos_pref')
-            .select('*, acta_voto_id')
-            .in('acta_voto_id', votoIds)
-        : { data: [] }
-
-      // Obtener IDs de acta_votos con su id
+      // 2. Votos con ID propio
       const { data: votosConId } = actaIds.length
         ? await supabase.from('acta_votos')
             .select('id, acta_id, votos, partido_votado_id, partido_votado:partidos(codigo, nombre, orden)')
             .in('acta_id', actaIds)
         : { data: [] }
 
+      // 3. Preferenciales
       const { data: prefsConId } = (votosConId ?? []).length
         ? await supabase.from('acta_votos_pref')
             .select('acta_voto_id, numero_candidato, votos')
@@ -614,70 +600,77 @@ export default function AdminDashboard() {
         : { data: [] }
 
       const wb = XLSX.utils.book_new()
-      const nombrePartido = partido?.nombre ?? 'Partido'
-      const fechaExport = new Date().toLocaleString('es-PE')
-
-      // ── HOJA 1: RESUMEN POR MESA ──────────────────────────────
-      const resumenRows = []
-      resumenRows.push([`Exportación — ${nombrePartido} — ${fechaExport}`])
-      resumenRows.push([])
-      resumenRows.push([
-        'Mesa', 'Local Electoral', 'Distrito', 'Provincia', 'Departamento',
-        'Electores Hábiles', 'Total Votantes', 'Votos Nulos', 'Votos Blancos',
-        'Categoría', 'Estado', 'Enviado', 'Hash Acta (8 chars)',
-        'Responsable', 'DNI'
-      ])
-
-      ;(actasRaw ?? []).forEach(a => {
-        resumenRows.push([
-          a.mesa?.numero ?? '',
-          a.mesa?.local_nombre ?? '',
-          a.mesa?.distrito ?? '',
-          a.mesa?.provincia ?? '',
-          a.mesa?.departamento ?? '',
-          a.mesa?.electores_habiles ?? 0,
-          a.total_votantes ?? 0,
-          a.votos_nulos ?? 0,
-          a.votos_blancos ?? 0,
-          a.categoria?.nombre ?? '',
-          a.estado ?? '',
-          a.enviado_at ? new Date(a.enviado_at).toLocaleString('es-PE') : 'Pendiente',
-          a.hash_acta ? a.hash_acta.slice(0, 8) : '',
-          a.personero?.nombre ?? 'Admin',
-          a.personero?.dni ?? '',
-        ])
-      })
-
-      const ws1 = XLSX.utils.aoa_to_sheet(resumenRows)
-      ws1['!cols'] = [
-        {wch:8},{wch:35},{wch:18},{wch:18},{wch:16},
-        {wch:10},{wch:10},{wch:10},{wch:10},
-        {wch:30},{wch:12},{wch:20},{wch:14},
-        {wch:25},{wch:12}
-      ]
-      XLSX.utils.book_append_sheet(wb, ws1, 'Resumen Actas')
-
-      // ── HOJA 2: VOTOS POR PARTIDO (detalle) ──────────────────
-      const votosRows = []
-      votosRows.push([`Votos por Partido — ${nombrePartido} — ${fechaExport}`])
-      votosRows.push([])
-      votosRows.push([
-        'Mesa', 'Local Electoral', 'Distrito', 'Departamento',
-        'Categoría', 'Estado Acta',
-        'N° Orden', 'Código Partido', 'Partido Político', 'Votos'
-      ])
-
+      const codigo_partido = partido?.codigo ?? 'PARTIDO'
+      const nombre_partido = partido?.nombre ?? 'Partido'
       const actaMap = Object.fromEntries((actasRaw ?? []).map(a => [a.id, a]))
+      const votoMap = Object.fromEntries((votosConId ?? []).map(v => [v.id, v]))
+      const nMesa = m => parseInt(m) || 0
+
+      // ── HOJA 1: ACTAS — 1 fila = 1 acta ──────────────────────────────────
+      const h1 = [['partido','mesa_numero','local_electoral','distrito','provincia',
+        'departamento','electores_habiles','categoria_orden','categoria_codigo',
+        'categoria_nombre','estado_acta','total_votantes','votos_nulos','votos_blancos',
+        'votos_validos','pct_participacion','responsable','dni_responsable',
+        'fecha_envio','hash_acta']]
+      ;(actasRaw ?? [])
+        .sort((a,b) => nMesa(a.mesa?.numero) - nMesa(b.mesa?.numero))
+        .forEach(a => {
+          const validos = Math.max(0, (a.total_votantes??0) - (a.votos_nulos??0) - (a.votos_blancos??0))
+          const pct = a.mesa?.electores_habiles > 0
+            ? parseFloat(((a.total_votantes??0) / a.mesa.electores_habiles * 100).toFixed(2)) : 0
+          h1.push([
+            nombre_partido,
+            a.mesa?.numero ?? '',
+            a.mesa?.local_nombre ?? '',
+            a.mesa?.distrito ?? '',
+            a.mesa?.provincia ?? '',
+            a.mesa?.departamento ?? '',
+            a.mesa?.electores_habiles ?? 0,
+            a.categoria?.orden ?? '',
+            a.categoria?.codigo ?? '',
+            a.categoria?.nombre ?? '',
+            a.estado ?? '',
+            a.total_votantes ?? 0,
+            a.votos_nulos ?? 0,
+            a.votos_blancos ?? 0,
+            validos,
+            pct,
+            a.personero?.nombre ?? 'Admin',
+            a.personero?.dni ?? '',
+            a.enviado_at ? new Date(a.enviado_at).toLocaleString('es-PE') : '',
+            a.hash_acta ? a.hash_acta.slice(0,16) : '',
+          ])
+        })
+      const ws1 = XLSX.utils.aoa_to_sheet(h1)
+      ws1['!cols'] = [
+        {wch:30},{wch:8},{wch:35},{wch:18},{wch:18},{wch:16},
+        {wch:10},{wch:8},{wch:10},{wch:32},
+        {wch:12},{wch:10},{wch:10},{wch:10},{wch:10},{wch:10},
+        {wch:28},{wch:12},{wch:20},{wch:18}
+      ]
+      XLSX.utils.book_append_sheet(wb, ws1, 'Actas')
+
+      // ── HOJA 2: VOTOS_PARTIDO — 1 fila = 1 partido x acta ────────────────
+      const h2 = [['partido','mesa_numero','local_electoral','distrito','provincia',
+        'departamento','categoria_codigo','categoria_nombre','estado_acta',
+        'orden_partido','codigo_partido_votado','nombre_partido_votado','votos']]
       ;(votosConId ?? [])
-        .sort((a, b) => (a.partido_votado?.orden ?? 99) - (b.partido_votado?.orden ?? 99))
+        .sort((a,b) => {
+          const actaA = actaMap[a.acta_id], actaB = actaMap[b.acta_id]
+          const diff = nMesa(actaA?.mesa?.numero) - nMesa(actaB?.mesa?.numero)
+          return diff !== 0 ? diff : (a.partido_votado?.orden??99) - (b.partido_votado?.orden??99)
+        })
         .forEach(v => {
           const acta = actaMap[v.acta_id]
           if (!acta) return
-          votosRows.push([
+          h2.push([
+            nombre_partido,
             acta.mesa?.numero ?? '',
             acta.mesa?.local_nombre ?? '',
             acta.mesa?.distrito ?? '',
+            acta.mesa?.provincia ?? '',
             acta.mesa?.departamento ?? '',
+            acta.categoria?.codigo ?? '',
             acta.categoria?.nombre ?? '',
             acta.estado ?? '',
             v.partido_votado?.orden ?? '',
@@ -686,87 +679,142 @@ export default function AdminDashboard() {
             parseInt(v.votos) || 0,
           ])
         })
-
-      const ws2 = XLSX.utils.aoa_to_sheet(votosRows)
+      const ws2 = XLSX.utils.aoa_to_sheet(h2)
       ws2['!cols'] = [
-        {wch:8},{wch:35},{wch:18},{wch:16},
-        {wch:30},{wch:12},
+        {wch:30},{wch:8},{wch:35},{wch:18},{wch:18},{wch:16},
+        {wch:10},{wch:32},{wch:12},
         {wch:8},{wch:8},{wch:40},{wch:8}
       ]
-      XLSX.utils.book_append_sheet(wb, ws2, 'Votos por Partido')
+      XLSX.utils.book_append_sheet(wb, ws2, 'Votos_Partido')
 
-      // ── HOJA 3: PREFERENCIALES ────────────────────────────────
-      const prefRows = []
-      prefRows.push([`Votos Preferenciales — ${nombrePartido} — ${fechaExport}`])
-      prefRows.push([])
-      prefRows.push([
-        'Mesa', 'Local Electoral', 'Distrito', 'Departamento',
-        'Categoría', 'Estado Acta',
-        'Partido', 'N° Candidato', 'Votos Preferenciales'
-      ])
-
-      const votoMap = Object.fromEntries((votosConId ?? []).map(v => [v.id, v]))
-      ;(prefsConId ?? []).forEach(pref => {
-        const voto = votoMap[pref.acta_voto_id]
-        if (!voto) return
-        const acta = actaMap[voto.acta_id]
-        if (!acta) return
-        prefRows.push([
-          acta.mesa?.numero ?? '',
-          acta.mesa?.local_nombre ?? '',
-          acta.mesa?.distrito ?? '',
-          acta.mesa?.departamento ?? '',
-          acta.categoria?.nombre ?? '',
-          acta.estado ?? '',
-          voto.partido_votado?.nombre ?? '',
-          pref.numero_candidato,
-          parseInt(pref.votos) || 0,
-        ])
-      })
-
-      if (prefRows.length > 3) {
-        const ws3 = XLSX.utils.aoa_to_sheet(prefRows)
+      // ── HOJA 3: PREFERENCIALES — 1 fila = 1 candidato x acta ─────────────
+      const h3 = [['partido','mesa_numero','local_electoral','distrito','provincia',
+        'departamento','categoria_codigo','categoria_nombre','estado_acta',
+        'orden_partido','codigo_partido_votado','nombre_partido_votado',
+        'numero_candidato','votos_preferenciales']]
+      ;(prefsConId ?? [])
+        .sort((a,b) => {
+          const vA = votoMap[a.acta_voto_id], vB = votoMap[b.acta_voto_id]
+          const actaA = actaMap[vA?.acta_id], actaB = actaMap[vB?.acta_id]
+          const diff = nMesa(actaA?.mesa?.numero) - nMesa(actaB?.mesa?.numero)
+          return diff !== 0 ? diff : a.numero_candidato - b.numero_candidato
+        })
+        .forEach(pref => {
+          const voto = votoMap[pref.acta_voto_id]
+          if (!voto) return
+          const acta = actaMap[voto.acta_id]
+          if (!acta) return
+          h3.push([
+            nombre_partido,
+            acta.mesa?.numero ?? '',
+            acta.mesa?.local_nombre ?? '',
+            acta.mesa?.distrito ?? '',
+            acta.mesa?.provincia ?? '',
+            acta.mesa?.departamento ?? '',
+            acta.categoria?.codigo ?? '',
+            acta.categoria?.nombre ?? '',
+            acta.estado ?? '',
+            voto.partido_votado?.orden ?? '',
+            voto.partido_votado?.codigo ?? '',
+            voto.partido_votado?.nombre ?? '',
+            pref.numero_candidato,
+            parseInt(pref.votos) || 0,
+          ])
+        })
+      if (h3.length > 1) {
+        const ws3 = XLSX.utils.aoa_to_sheet(h3)
         ws3['!cols'] = [
-          {wch:8},{wch:35},{wch:18},{wch:16},
-          {wch:30},{wch:12},
-          {wch:40},{wch:14},{wch:18}
+          {wch:30},{wch:8},{wch:35},{wch:18},{wch:18},{wch:16},
+          {wch:10},{wch:32},{wch:12},
+          {wch:8},{wch:8},{wch:40},{wch:14},{wch:16}
         ]
         XLSX.utils.book_append_sheet(wb, ws3, 'Preferenciales')
       }
 
-      // ── HOJA 4: PERSONEROS ────────────────────────────────────
-      const persRows = []
-      persRows.push([`Personeros — ${nombrePartido} — ${fechaExport}`])
-      persRows.push([])
-      persRows.push(['Nombre', 'DNI', 'Teléfono', 'Mesa', 'Local Electoral', 'Estado'])
+      // ── HOJA 4: AVANCE_MESAS — 1 fila = 1 mesa ───────────────────────────
+      const mesasConActas = {}
+      ;(actasRaw ?? []).forEach(a => {
+        const key = a.mesa?.numero
+        if (!key) return
+        if (!mesasConActas[key]) mesasConActas[key] = {
+          mesa: a.mesa, personero: a.personero?.nombre ?? 'Admin', cats: {}
+        }
+        mesasConActas[key].cats[a.categoria?.codigo] = a.estado
+      })
+      const h4 = [['partido','mesa_numero','local_electoral','distrito','provincia',
+        'departamento','electores_habiles','responsable',
+        'estado_PRES','estado_SEN_N','estado_SEN_R','estado_DIP','estado_PARL',
+        'actas_enviadas','actas_total','pct_completado']]
+      const cats_orden = ['PRES','SEN_N','SEN_R','DIP','PARL']
+      Object.values(mesasConActas)
+        .sort((a,b) => nMesa(a.mesa?.numero) - nMesa(b.mesa?.numero))
+        .forEach(m => {
+          const enviadas = cats_orden.filter(c => m.cats[c] === 'enviado').length
+          h4.push([
+            nombre_partido,
+            m.mesa?.numero ?? '',
+            m.mesa?.local_nombre ?? '',
+            m.mesa?.distrito ?? '',
+            m.mesa?.provincia ?? '',
+            m.mesa?.departamento ?? '',
+            m.mesa?.electores_habiles ?? 0,
+            m.personero,
+            m.cats['PRES'] ?? 'pendiente',
+            m.cats['SEN_N'] ?? 'pendiente',
+            m.cats['SEN_R'] ?? 'pendiente',
+            m.cats['DIP'] ?? 'pendiente',
+            m.cats['PARL'] ?? 'pendiente',
+            enviadas,
+            5,
+            parseFloat((enviadas / 5 * 100).toFixed(1)),
+          ])
+        })
+      const ws4 = XLSX.utils.aoa_to_sheet(h4)
+      ws4['!cols'] = [
+        {wch:30},{wch:8},{wch:35},{wch:18},{wch:18},{wch:16},
+        {wch:10},{wch:28},
+        {wch:12},{wch:12},{wch:12},{wch:12},{wch:12},
+        {wch:12},{wch:10},{wch:12}
+      ]
+      XLSX.utils.book_append_sheet(wb, ws4, 'Avance_Mesas')
+
+      // ── HOJA 5: PERSONEROS ────────────────────────────────────────────────
+      const h5 = [['partido','nombre','dni','telefono',
+        'mesa_numero','local_electoral','distrito','departamento','estado']]
       personeros.forEach(p => {
         const mesa = p.mesa?.[0]?.mesa
-        persRows.push([
+        h5.push([
+          nombre_partido,
           p.nombre ?? '',
           p.dni ?? '',
           p.telefono ?? '',
-          mesa?.numero ?? 'Sin mesa',
+          mesa?.numero ?? '',
           mesa?.local_nombre ?? '',
-          p.activo ? 'Activo' : 'Inactivo',
+          mesa?.distrito ?? '',
+          mesa?.departamento ?? '',
+          p.activo ? 'activo' : 'inactivo',
         ])
       })
-      const ws4 = XLSX.utils.aoa_to_sheet(persRows)
-      ws4['!cols'] = [{wch:28},{wch:12},{wch:14},{wch:8},{wch:35},{wch:10}]
-      XLSX.utils.book_append_sheet(wb, ws4, 'Personeros')
+      const ws5 = XLSX.utils.aoa_to_sheet(h5)
+      ws5['!cols'] = [
+        {wch:30},{wch:28},{wch:12},{wch:14},
+        {wch:8},{wch:35},{wch:18},{wch:16},{wch:10}
+      ]
+      XLSX.utils.book_append_sheet(wb, ws5, 'Personeros')
 
       // Descargar
-      const codigo = partido?.codigo ?? 'partido'
-      const fecha = new Date().toISOString().slice(0, 10)
-      XLSX.writeFile(wb, `personero-pe_${codigo}_${fecha}.xlsx`)
-      toast.success('Excel descargado')
+      const fecha = new Date().toISOString().slice(0,10)
+      XLSX.writeFile(wb, `personero-pe_${codigo_partido}_${fecha}.xlsx`)
+      toast.success(`Excel listo — ${(actasRaw??[]).length} actas · ${(votosConId??[]).length} votos · ${(prefsConId??[]).length} preferenciales`)
     } catch (err) {
       toast.error('Error al exportar: ' + err.message)
+      console.error(err)
     } finally {
       setExportLoading(false)
     }
   }
 
-  async function enviarInvitacion() {
+    async function enviarInvitacion() {
     if(!invEmail||!invMesa){toast.error('Completa email y mesa');return}
     const mesaObj=mesas.find(m=>m.id===invMesa)
     if(!mesaObj){toast.error('Mesa no encontrada');return}
