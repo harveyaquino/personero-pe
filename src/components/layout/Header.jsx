@@ -21,7 +21,7 @@ export function Header() {
 
       <div className="flex-1 min-w-0">
         <h1 className="text-white font-semibold text-sm leading-tight truncate">
-          Personero.pe | EG 2026
+          Personero.pe | Segunda Vuelta 2026
         </h1>
         {partido && (
           <p className="text-white/75 text-xs truncate leading-tight">{partido.nombre}</p>

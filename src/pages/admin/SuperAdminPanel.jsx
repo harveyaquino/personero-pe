@@ -91,7 +91,7 @@ export default function SuperAdminPanel() {
         {tab === 0 && (
           <div className="card overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100 text-sm font-semibold">
-              Partidos políticos EG 2026 ({partidos.length})
+              Candidatos Segunda Vuelta 2026 ({partidos.length})
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">

@@ -571,9 +571,8 @@ export default function AdminDashboard() {
     toast('Generando Excel...', { icon: '⏳', duration: 2000 })
     try {
       // Mapa de categorías desde constante local (no depende de join)
-      const catNombre = { 1:'Presidente y Vicepresidente', 2:'Senadores — Nivel Nacional',
-        3:'Senadores — Nivel Regional', 4:'Diputados', 5:'Parlamento Andino' }
-      const catCodigo = { 1:'PRES', 2:'SEN_N', 3:'SEN_R', 4:'DIP', 5:'PARL' }
+      const catNombre = { 1:'Presidente y Vicepresidente' }
+      const catCodigo = { 1:'PRES' }
 
       // 1. TODAS las actas (todos los partidos) — para consolidado real
       const { data: actasRaw } = await supabase
@@ -768,9 +767,9 @@ export default function AdminDashboard() {
       })
       const h4 = [['partido_registro','codigo_partido','mesa_numero','local_electoral',
         'distrito','provincia','departamento','electores_habiles','responsable',
-        'estado_PRES','estado_SEN_N','estado_SEN_R','estado_DIP','estado_PARL',
+        'estado_PRES',
         'actas_enviadas','actas_total','pct_completado']]
-      const cats_orden = ['PRES','SEN_N','SEN_R','DIP','PARL']
+      const cats_orden = ['PRES']
       Object.values(mesasConActas)
         .sort((a,b) => {
           const diff = nMesa(a.mesa?.numero) - nMesa(b.mesa?.numero)
@@ -789,20 +788,16 @@ export default function AdminDashboard() {
             m.mesa?.electores_habiles ?? 0,
             m.personero,
             m.cats['PRES'] ?? 'pendiente',
-            m.cats['SEN_N'] ?? 'pendiente',
-            m.cats['SEN_R'] ?? 'pendiente',
-            m.cats['DIP'] ?? 'pendiente',
-            m.cats['PARL'] ?? 'pendiente',
             enviadas,
-            5,
-            parseFloat((enviadas / 5 * 100).toFixed(1)),
+            1,
+            parseFloat((enviadas / 1 * 100).toFixed(1)),
           ])
         })
       const ws4 = XLSX.utils.aoa_to_sheet(h4)
       ws4['!cols'] = [
         {wch:30},{wch:8},{wch:35},{wch:18},{wch:18},{wch:16},
         {wch:10},{wch:28},
-        {wch:12},{wch:12},{wch:12},{wch:12},{wch:12},
+        {wch:12},
         {wch:12},{wch:10},{wch:12}
       ]
       XLSX.utils.book_append_sheet(wb, ws4, 'Avance_Mesas')

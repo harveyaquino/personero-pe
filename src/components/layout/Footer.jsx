@@ -25,7 +25,7 @@ export function Footer() {
           </svg>
           <span className="group-hover:underline underline-offset-2">linkedin.com/in/harveyaquinomas</span>
         </a>
-        <p className="text-[10px] text-gray-300 mt-0.5">Personero.pe · Elecciones Generales 2026 · Perú</p>
+        <p className="text-[10px] text-gray-300 mt-0.5">Personero.pe · Segunda Vuelta 2026 · Perú</p>
       </div>
     </footer>
   )
