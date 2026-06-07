@@ -998,15 +998,20 @@ export default function AdminDashboard() {
                   if(!tieneActa&&!res.length) return null
                   const maxV=res[0]?.total_votos||1
                   const totalCat=res.reduce((s,r)=>s+r.total_votos,0)
-                  const estadoCat=actasInfo.find(a=>parseInt(a.categoria_id)===cat.id)?.estado??'sin_iniciar'
+                  const actasDeCat=actasInfo.filter(a=>parseInt(a.categoria_id)===cat.id)
+                  const mesasEnviadasCat=actasDeCat.filter(a=>a.estado==='enviado'||a.estado==='validado').length
+                  const estadoCat=actasDeCat.length===0?'sin_iniciar'
+                    :actasDeCat.every(a=>a.estado==='enviado'||a.estado==='validado')?'enviado'
+                    :'borrador'
                   return (
                     <div key={cat.id} className="card overflow-hidden">
                       <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
                         <div className="w-2 h-5 rounded-sm shrink-0" style={{background:cat.color}}/>
                         <span className="text-sm font-semibold flex-1" style={{color:cat.color}}>{cat.nombre}</span>
-                        <span className="text-xs text-gray-400 font-mono mr-2">{totalCat} votos</span>
-                        {estadoCat==='enviado'&&<span className="badge-ok">✓ Enviado</span>}
-                        {estadoCat==='borrador'&&<span className="badge-pending">● Progreso</span>}
+                        <span className="text-xs text-gray-400 font-mono mr-2">{totalCat.toLocaleString('es-PE')} votos</span>
+                        <span className="text-xs text-gray-400 font-mono mr-2">{mesasEnviadasCat}/{actasDeCat.length} mesas</span>
+                        {estadoCat==='enviado'&&<span className="badge-ok">✓ Todas selladas</span>}
+                        {estadoCat==='borrador'&&<span className="badge-pending">● En progreso</span>}
                         {estadoCat==='sin_iniciar'&&<span className="badge-error">Sin iniciar</span>}
                       </div>
                       {res.length===0?(
