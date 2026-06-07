@@ -561,8 +561,12 @@ export default function AdminDashboard() {
       const catId=catMap[row.acta_id]
       if(!p||!catId) return
       const key=`${p.codigo}-${catId}`
-      if(!mapa[key]) mapa[key]={partido_votado:p.codigo,nombre_partido:p.nombre,color_hex:p.color_hex,orden:p.orden,categoria_id:catId,total_votos:0,prefMap:{},estado:estadoMap[row.acta_id]??'borrador'}
-      mapa[key].total_votos+=parseInt(row.votos)||0
+      if(!mapa[key]) mapa[key]={partido_votado:p.codigo,nombre_partido:p.nombre,color_hex:p.color_hex,orden:p.orden,categoria_id:catId,total_votos:0,votos_enviados:0,votos_borrador:0,prefMap:{},estado:estadoMap[row.acta_id]??'borrador'}
+      const v=parseInt(row.votos)||0
+      mapa[key].total_votos+=v
+      const est=estadoMap[row.acta_id]
+      if(est==='enviado'||est==='validado') mapa[key].votos_enviados+=v
+      else mapa[key].votos_borrador+=v
       row.prefs?.forEach(pref=>{const num=pref.numero_candidato;mapa[key].prefMap[num]=(mapa[key].prefMap[num]||0)+(parseInt(pref.votos)||0)})
     })
     setResultados(Object.values(mapa).sort((a,b)=>b.total_votos-a.total_votos))
@@ -1024,6 +1028,15 @@ export default function AdminDashboard() {
                                     </div>
                                   </div>
                                   <div className="text-xs font-mono text-gray-500 w-10 text-right shrink-0">{pctTotal}%</div>
+                                </div>
+                                {/* Desglose sellados vs borrador */}
+                                <div className="flex items-center gap-3 pl-36">
+                                  {r.votos_enviados>0&&(
+                                    <span className="text-[10px] text-green-600 font-mono">✓ {r.votos_enviados.toLocaleString('es-PE')} sellados</span>
+                                  )}
+                                  {r.votos_borrador>0&&(
+                                    <span className="text-[10px] text-yellow-600 font-mono">● {r.votos_borrador.toLocaleString('es-PE')} en borrador</span>
+                                  )}
                                 </div>
                                 {topPrefs.length>0&&(
                                   <div className="flex items-center gap-1.5 pl-36 flex-wrap">
