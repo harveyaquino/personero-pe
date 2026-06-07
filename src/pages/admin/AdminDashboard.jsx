@@ -462,9 +462,10 @@ function BuscadorMesa({ onSeleccionar }) {
 
 const TABS = [
   { id: 'consolidado', label: 'Consolidado', icon: BarChart2 },
-  { id: 'mesas',       label: 'Mesas',       icon: MapPin },
-  { id: 'personeros',  label: 'Personeros',  icon: Users },
-  { id: 'seguridad',   label: 'Seguridad',   icon: Shield },
+  { id: 'en_proceso',  label: 'En proceso',  icon: Clock    },
+  { id: 'mesas',       label: 'Mesas',       icon: MapPin   },
+  { id: 'personeros',  label: 'Personeros',  icon: Users    },
+  { id: 'seguridad',   label: 'Seguridad',   icon: Shield   },
 ]
 
 export default function AdminDashboard() {
@@ -484,6 +485,8 @@ export default function AdminDashboard() {
   const [ultimaActualizacion, setUltimaActualizacion] = useState(null)
   const [mesaActiva, setMesaActiva]   = useState(null)
   const [exportLoading, setExportLoading] = useState(false)
+  const [actasBorrador, setActasBorrador] = useState([])
+  const [enviandoActa, setEnviandoActa]   = useState({})
   const channelRef = useRef(null)
 
   useEffect(()=>{
@@ -496,7 +499,7 @@ export default function AdminDashboard() {
   function suscribirRealtime() {
     channelRef.current = supabase.channel('actas-live')
       .on('postgres_changes',{event:'*',schema:'public',table:'actas'},()=>{
-        loadResultados(); loadAvanceMesas()
+        loadResultados(); loadAvanceMesas(); loadActasBorrador()
         setUltimaActualizacion(new Date())
         toast('Nueva acta recibida',{icon:'📋',duration:3000})
       }).subscribe()
@@ -504,7 +507,7 @@ export default function AdminDashboard() {
 
   async function loadAll() {
     setLoading(true)
-    await Promise.allSettled([loadMesas(),loadPersoneros(),loadAudit(),loadResultados(),loadAvanceMesas()])
+    await Promise.allSettled([loadMesas(),loadPersoneros(),loadAudit(),loadResultados(),loadAvanceMesas(),loadActasBorrador()])
     setLoading(false)
   }
 
@@ -563,6 +566,39 @@ export default function AdminDashboard() {
       row.prefs?.forEach(pref=>{const num=pref.numero_candidato;mapa[key].prefMap[num]=(mapa[key].prefMap[num]||0)+(parseInt(pref.votos)||0)})
     })
     setResultados(Object.values(mapa).sort((a,b)=>b.total_votos-a.total_votos))
+  }
+
+  async function loadActasBorrador() {
+    if (!perfil?.partido_id) return
+    const { data } = await supabase
+      .from('actas')
+      .select(`
+        id, categoria_id, estado, updated_at, total_votantes, votos_nulos, votos_blancos,
+        mesa:mesas(id, numero, local_nombre, distrito, provincia, departamento, electores_habiles),
+        personero:perfiles(nombre),
+        votos:acta_votos(votos, partido:partidos(codigo, nombre, color_hex))
+      `)
+      .eq('partido_id', perfil.partido_id)
+      .eq('estado', 'borrador')
+      .order('updated_at', { ascending: false })
+    setActasBorrador(data ?? [])
+  }
+
+  async function enviarActaBorrador(acta) {
+    setEnviandoActa(prev => ({ ...prev, [acta.id]: true }))
+    try {
+      // El admin toma ownership del acta para poder sellarla
+      await supabase.from('actas').update({ personero_id: user.id }).eq('id', acta.id)
+      const { data, error } = await supabase.rpc('enviar_acta', { p_acta_id: acta.id })
+      if (error) throw error
+      if (!data.ok) throw new Error(data.error)
+      toast.success('✓ Acta sellada y enviada')
+      loadActasBorrador(); loadAvanceMesas(); loadResultados()
+    } catch (err) {
+      toast.error('Error: ' + err.message)
+    } finally {
+      setEnviandoActa(prev => ({ ...prev, [acta.id]: false }))
+    }
   }
 
   async function exportarExcel() {
@@ -923,10 +959,18 @@ export default function AdminDashboard() {
         <div className="card flex overflow-hidden">
           {TABS.map(t=>{
             const Icon=t.icon
+            const isProceso = t.id === 'en_proceso'
+            const badgeCount = isProceso ? actasBorrador.length : 0
             return (
               <button key={t.id} onClick={()=>setTab(t.id)}
-                className={`flex-1 flex items-center justify-center gap-1 py-3 text-xs font-medium border-r border-gray-100 last:border-0 transition-colors active:scale-95 ${tab===t.id?'bg-gray-800 text-white':'text-gray-500 hover:bg-gray-50'}`}>
-                <Icon size={13}/><span className="hidden sm:inline">{t.label}</span>
+                className={`flex-1 relative flex items-center justify-center gap-1 py-3 text-xs font-medium border-r border-gray-100 last:border-0 transition-colors active:scale-95 ${tab===t.id?'bg-gray-800 text-white':'text-gray-500 hover:bg-gray-50'}`}>
+                <Icon size={13}/>
+                <span className="hidden sm:inline">{t.label}</span>
+                {badgeCount > 0 && (
+                  <span className={`absolute top-1.5 right-1.5 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold flex items-center justify-center ${tab===t.id?'bg-yellow-400 text-gray-900':'bg-yellow-400 text-gray-900'}`}>
+                    {badgeCount}
+                  </span>
+                )}
               </button>
             )
           })}
@@ -998,6 +1042,94 @@ export default function AdminDashboard() {
                   )
                 })
               )}
+            </div>
+          )}
+
+          {tab==='en_proceso'&&(
+            <div className="space-y-3">
+              <div className="text-xs text-gray-500 px-1">
+                {actasBorrador.length === 0
+                  ? 'Sin actas en borrador — todas enviadas o sin iniciar'
+                  : `${actasBorrador.length} acta${actasBorrador.length!==1?'s':''} en borrador sin enviar`}
+              </div>
+
+              {actasBorrador.length === 0 ? (
+                <div className="card p-8 text-center">
+                  <CheckCircle className="mx-auto text-green-400 mb-3" size={32}/>
+                  <p className="text-sm font-medium text-gray-600">Sin actas pendientes</p>
+                  <p className="text-xs text-gray-400 mt-1">No hay actas en borrador por el momento.</p>
+                </div>
+              ) : actasBorrador.map(acta => {
+                const totalVotos = acta.votos?.reduce((s,v) => s+(parseInt(v.votos)||0), 0) ?? 0
+                const cat = CATEGORIAS.find(c => c.id === acta.categoria_id)
+                const ultimaMod = new Date(acta.updated_at)
+                const fpo = acta.votos?.[0] // solo referencia visual
+                return (
+                  <div key={acta.id} className="card overflow-hidden">
+                    <div className="flex items-start gap-3 p-3">
+                      <div className="w-10 h-10 rounded-xl bg-yellow-50 border border-yellow-200 flex items-center justify-center shrink-0">
+                        <Clock size={18} className="text-yellow-500"/>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono font-bold text-sm">Mesa {acta.mesa?.numero}</span>
+                          <span className="badge-pending">Borrador</span>
+                          {cat && <span className="text-xs font-medium" style={{color:cat.color}}>{cat.nombre}</span>}
+                        </div>
+                        <div className="text-xs text-gray-500 truncate mt-0.5">
+                          {acta.mesa?.local_nombre} · {acta.mesa?.distrito}
+                        </div>
+                        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                          <span className="text-xs font-mono text-gray-700 font-semibold">{totalVotos} votos registrados</span>
+                          {acta.total_votantes > 0 && <span className="text-xs text-gray-400">{acta.total_votantes} electores</span>}
+                          {acta.personero?.nombre && <span className="text-xs text-gray-400 truncate">por {acta.personero.nombre}</span>}
+                        </div>
+                        <div className="text-[10px] text-gray-300 font-mono mt-1">
+                          Modificado: {ultimaMod.toLocaleString('es-PE',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Votos por candidato */}
+                    {totalVotos > 0 && (
+                      <div className="px-3 pb-2 space-y-1.5">
+                        {(acta.votos ?? []).filter(v => v.votos > 0).map(v => {
+                          const pct = Math.round((v.votos / totalVotos) * 100)
+                          return (
+                            <div key={v.partido?.codigo} className="flex items-center gap-2">
+                              <div className="text-xs text-gray-600 w-28 shrink-0 truncate font-medium">{v.partido?.nombre ?? '—'}</div>
+                              <div className="flex-1 h-5 bg-gray-100 rounded overflow-hidden">
+                                <div className="h-full rounded flex items-center px-1.5 transition-all"
+                                  style={{width:`${Math.max(pct,2)}%`, background: v.partido?.color_hex ?? '#888'}}>
+                                  <span className="text-[10px] text-white font-mono font-bold">{v.votos}</span>
+                                </div>
+                              </div>
+                              <div className="text-[10px] font-mono text-gray-400 w-8 text-right shrink-0">{pct}%</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    <div className="flex gap-2 px-3 pb-3">
+                      <button
+                        onClick={() => setMesaActiva(acta.mesa)}
+                        className="btn-secondary flex-1 text-xs py-2.5">
+                        Ver / Completar →
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!window.confirm(`¿Enviar y sellar el acta de Mesa ${acta.mesa?.numero}? Esta acción es definitiva.`)) return
+                          enviarActaBorrador(acta)
+                        }}
+                        disabled={enviandoActa[acta.id]}
+                        className="btn-success flex-1 text-xs py-2.5 disabled:opacity-50">
+                        {enviandoActa[acta.id] ? 'Enviando...' : '✓ Sellar y enviar'}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
 
